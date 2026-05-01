@@ -18,13 +18,17 @@ def clean_column_names(df):
     return df
 
 def clean_record_for_json(record):
-    """Απολυμαίνει τα δεδομένα από NaT, NaN και ημερομηνίες που σπάνε το JSON."""
+    """Απολυμαίνει τα δεδομένα από NaT, NaN, ημερομηνίες και φτιάχνει τους ακέραιους."""
     cleaned = {}
     for k, v in record.items():
         if pd.isna(v):  # Πιάνει NaN, None, NaT
             cleaned[k] = None
         elif isinstance(v, (datetime.date, datetime.datetime, pd.Timestamp)):
             cleaned[k] = v.isoformat()  # Μετατρέπει ημερομηνίες σε κείμενο
+        elif isinstance(v, float) and v.is_integer():
+            cleaned[k] = int(v)  # Μετατρέπει το 1.0 σε καθαρό 1
+        elif isinstance(v, str) and v.endswith('.0') and v.replace('.0', '').isdigit():
+            cleaned[k] = int(v.replace('.0', ''))  # Πιάνει την περίπτωση που έγινε κείμενο "1.0"
         else:
             cleaned[k] = v
     return cleaned
