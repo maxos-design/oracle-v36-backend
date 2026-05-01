@@ -64,7 +64,8 @@ print("📤 Ανεβάζω όλα τα δεδομένα στη Supabase...")
 print("\n   📜 Ledger...")
 df_ledger = pd.read_excel("Oracle_Historical_Ledger.xlsx", sheet_name="Ledger")
 df_ledger = clean_column_names(df_ledger)
-df_ledger = df_ledger.drop(columns=['λ_(lambda)', 'lambda_value'], errors='ignore')
+# Προσθέσαμε το μ_(mu) στη λίστα διαγραφής
+df_ledger = df_ledger.drop(columns=['λ_(lambda)', 'lambda_value', 'μ_(mu)', 'mu_value'], errors='ignore')
 upload_dataframe("ledger", df_ledger)
 
 # 2. Enterprise Picks
@@ -80,7 +81,6 @@ upload_dataframe("picks", df_picks)
 print("\n   🏆 Top Picks...")
 df_top = pd.read_excel("Oracle_Analyst_Report_v6.xlsx", sheet_name="Top Picks", header=None)
 
-# Έξυπνη εύρεση της γραμμής με τους τίτλους
 header_idx = None
 for idx, row in df_top.iterrows():
     row_values = [str(cell).strip() for cell in row if pd.notna(cell)]
@@ -98,7 +98,8 @@ if header_idx is not None:
         df_top = df_top[~df_top["Match"].astype(str).str.contains("AVERAGE", na=False)]
     
     df_top = clean_column_names(df_top)
-    df_top = df_top.rename(columns={'02/05': 'date'})
+    # Προσθέσαμε το sharp_% -> sharp_pct
+    df_top = df_top.rename(columns={'02/05': 'date', 'sharp_%': 'sharp_pct'})
     df_top = df_top.drop(columns=['#', 'id'], errors='ignore')
     upload_dataframe("top_picks", df_top)
 else:
