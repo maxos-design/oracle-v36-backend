@@ -22,7 +22,8 @@ def clean_value(val):
 
 def clean_dataframe(df):
     """Αντικαθιστά όλες τις NaN/Inf τιμές στο DataFrame με None."""
-    return df.applymap(clean_value)
+    # Χρήση της σύγχρονης μεθόδου df.map
+    return df.map(clean_value)
 
 def upload_table(table_name, df):
     print(f"   Καθαρισμός δεδομένων για τον πίνακα {table_name}...")
