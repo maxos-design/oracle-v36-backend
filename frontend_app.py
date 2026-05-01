@@ -1,65 +1,78 @@
 import streamlit as st
-import pandas as pd
 import requests
-import numpy as np
+import pandas as pd
 
-# ───────────── ΡΥΘΜΙΣΕΙΣ (ΑΛΛΑΞΕ ΤΟ) ─────────────
-BACKEND_URL = "https://oracle-v36-backend.onrender.com"  # <-- ΒΑΛΕ ΤΟ URL ΣΟΥ
+BACKEND_URL = "https://oracle-v36-backend.onrender.com"
 
-# ───────────── ΣΕΛΙΔΑ ─────────────
-st.set_page_config(
-    page_title="Oracle Suite V36",
-    page_icon="⚽",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# Πλάγια μπάρα
-st.sidebar.image("https://i.imgur.com/7q8Q9vC.png", width=80)
+st.set_page_config(page_title="Oracle Suite V36", page_icon="⚽", layout="wide")
 st.sidebar.title("ORACLE SUITE V36")
-st.sidebar.markdown("Professional Betting Analytics")
-menu = st.sidebar.radio("Μενού", ["🏠 Dashboard", "📜 Ιστορικό Ledger"])
+menu = st.sidebar.radio("Μενού", ["🏠 Dashboard", "📜 Ιστορικό Ledger", "🎮 Control Panel", "🏆 Top Picks"])
 
-# ───────────── DASHBOARD ─────────────
+# ───────────── Dashboard ─────────────
 if menu == "🏠 Dashboard":
     st.title("🏠 Dashboard")
-    st.markdown("Καλώς ήρθατε στο Oracle Suite V36 Cloud Edition.")
-
     try:
         response = requests.get(f"{BACKEND_URL}/stats")
         stats = response.json()
-
         col1, col2, col3 = st.columns(3)
-        col1.metric("Συνολικά Στοιχήματα", stats.get('total_bets', 0))
+        col1.metric("Στοιχήματα", stats.get('total_bets', 0))
         col2.metric("Συνολικό PnL", f"€{stats.get('total_pnl', 0.0):.2f}")
         col3.metric("Win Rate", f"{stats.get('win_rate', 0.0):.1f}%")
+    except:
+        st.error("Δεν μπορώ να συνδεθώ με το backend.")
 
-        st.success("Τα δεδομένα αντλήθηκαν επιτυχώς από το cloud!")
-    except Exception as e:
-        st.error(f"Αποτυχία σύνδεσης με το backend: {e}")
-
-# ───────────── ΙΣΤΟΡΙΚΟ LEDGER ─────────────
+# ───────────── Ιστορικό Ledger ─────────────
 elif menu == "📜 Ιστορικό Ledger":
-    st.title("📜 Ιστορικό Στοιχημάτων")
-
+    st.title("📜 Ιστορικό Ledger")
     try:
-        response = requests.get(f"{BACKEND_URL}/ledger?limit=100")
-        data = response.json()
-        df = pd.DataFrame(data)
-
+        response = requests.get(f"{BACKEND_URL}/ledger?limit=200")
+        df = pd.DataFrame(response.json())
         if not df.empty:
-            st.dataframe(
-                df[['date', 'match', 'market', 'odds', 'result', 'pnl']],
-                use_container_width=True,
-                hide_index=True,
-            )
-            
+            st.dataframe(df[['date','match','market','odds','result','pnl']], use_container_width=True)
             df['pnl'] = pd.to_numeric(df['pnl'])
             df['cumulative_pnl'] = df['pnl'].cumsum()
-            
-            st.subheader("Γράφημα Κέρδους (PnL)")
-            st.line_chart(df, x='date', y='cumulative_pnl')
+            st.subheader("Γράφημα Κέρδους")
+            st.line_chart(df.set_index('date')['cumulative_pnl'])
+    except:
+        st.error("Αδυναμία φόρτωσης δεδομένων.")
+
+# ───────────── Control Panel ─────────────
+elif menu == "🎮 Control Panel":
+    st.title("🎮 Control Panel")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🔍 Τρέξε τον Scanner", use_container_width=True):
+            with st.spinner("Ο Scanner εκτελείται... Μπορεί να πάρει λίγη ώρα."):
+                try:
+                    resp = requests.post(f"{BACKEND_URL}/run-scanner")
+                    if resp.status_code == 200:
+                        st.success(resp.json().get("message", "Ο Scanner ολοκληρώθηκε!"))
+                    else:
+                        st.error(f"Σφάλμα: {resp.text}")
+                except:
+                    st.error("Αποτυχία σύνδεσης με τον server.")
+    with col2:
+        if st.button("🧠 Τρέξε τον Analyst", use_container_width=True):
+            with st.spinner("Ο Analyst αναλύει τα δεδομένα..."):
+                try:
+                    resp = requests.post(f"{BACKEND_URL}/run-analyst")
+                    if resp.status_code == 200:
+                        st.success(resp.json().get("message", "Ο Analyst ολοκληρώθηκε!"))
+                    else:
+                        st.error(f"Σφάλμα: {resp.text}")
+                except:
+                    st.error("Αποτυχία σύνδεσης με τον server.")
+
+# ───────────── Top Picks ─────────────
+elif menu == "🏆 Top Picks":
+    st.title("🏆 Top 15 Picks")
+    try:
+        response = requests.get(f"{BACKEND_URL}/top-picks")
+        data = response.json()
+        if data:
+            df = pd.DataFrame(data)
+            st.dataframe(df[['date','time','league','match','market','odds','score','grade']], use_container_width=True)
         else:
-            st.info("Δεν υπάρχουν δεδομένα στο Ledger ακόμα.")
-    except Exception as e:
-        st.error(f"Αποτυχία φόρτωσης δεδομένων: {e}")
+            st.info("Δεν υπάρχουν ακόμα Top Picks. Τρέξε τον Analyst πρώτα.")
+    except:
+        st.error("Σφάλμα φόρτωσης δεδομένων.")
