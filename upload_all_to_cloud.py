@@ -1,6 +1,5 @@
 import requests
 import pandas as pd
-import math
 
 SUPABASE_URL = "https://huizvgyasqjtsekevjxs.supabase.co"
 SUPABASE_KEY = "sb_secret_cPbMP7IfUMI4rieanbpKBg_J2Ysxlwj"  # Το service_role key σου
@@ -14,22 +13,19 @@ HEADERS = {
 def upload_dataframe(table_name, df):
     print(f"📤 Ανεβάζω {len(df)} εγγραφές στον πίνακα '{table_name}'...")
     
-    # 1. ΜΕΤΑΤΡΟΠΗ ΣΕ OBJECT ΚΑΙ ΑΝΤΙΚΑΤΑΣΤΑΣΗ NaN ΜΕ None
-    #    (Αυτό είναι το κλειδί για να μην υπάρχουν NaN στο JSON)
-    df = df.astype(object).where(pd.notnull(df), None)
+    # Αντικαθιστούμε όλα τα NaN/Inf/None με None (γίνεται null στο JSON)
+    df = df.where(pd.notnull(df), None)
     
-    # 2. ΜΕΤΑΤΡΟΠΗ ΣΕ ΛΙΣΤΑ ΑΠΟ ΛΕΞΙΚΑ
     records = df.to_dict(orient='records')
-    
     url = f"{SUPABASE_URL}/rest/v1/{table_name}"
     
-    # 3. ΚΑΘΑΡΙΣΜΟΣ ΠΑΛΙΩΝ ΕΓΓΡΑΦΩΝ
+    # Διαγραφή προηγούμενων εγγραφών
     try:
         requests.delete(f"{url}?id=gt.0", headers=HEADERS)
     except:
         pass
     
-    # 4. ΑΠΟΣΤΟΛΗ ΣΕ ΠΑΡΤΙΔΕΣ
+    # Αποστολή σε παρτίδες των 100
     batch_size = 100
     for i in range(0, len(records), batch_size):
         batch = records[i:i+batch_size]
