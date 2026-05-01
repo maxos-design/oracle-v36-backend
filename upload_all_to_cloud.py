@@ -12,25 +12,13 @@ HEADERS = {
     "Prefer": "resolution=merge-duplicates"
 }
 
-def clean_column_name(col_name):
-    """Μετατρέπει το όνομα στήλης σε κάτι αποδεκτό από τη Supabase."""
-    col_name = str(col_name).strip()
-    # Αντικαθιστά κενά και ειδικούς χαρακτήρες με κάτω παύλες
-    col_name = re.sub(r'[^\w]', '_', col_name)
-    # Αφαιρεί πολλαπλές κάτω παύλες
-    col_name = re.sub(r'_+', '_', col_name)
-    # Αφαιρεί κάτω παύλες στην αρχή και το τέλος
-    col_name = col_name.strip('_')
-    # Αν το όνομα είναι κενό ή ξεκινά με αριθμό, βάζει ένα πρόθεμα
-    if not col_name or col_name[0].isdigit():
-        col_name = "col_" + col_name
-    return col_name.lower()
-
 def clean_row(row):
     """Αντικαθιστά όλα τα NaN, Inf, -Inf σε ένα λεξικό με None."""
     cleaned = {}
     for key, value in row.items():
         if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+            cleaned[key] = None
+        elif value is None:
             cleaned[key] = None
         elif isinstance(value, str) and value.lower() in ("nan", "inf", "-inf"):
             cleaned[key] = None
@@ -40,16 +28,12 @@ def clean_row(row):
 
 def dataframe_to_safe_json(df):
     """Μετατρέπει ένα DataFrame σε λίστα από καθαρά λεξικά."""
-    # Αντικαθιστούμε όλα τα NaN/Inf με None
     df = df.where(pd.notnull(df), None)
     records = df.to_dict(orient="records")
     return [clean_row(row) for row in records]
 
 def upload_table(table_name, df):
     print(f"   📤 Ανεβάζω {len(df)} εγγραφές στον πίνακα '{table_name}'...")
-    
-    # Καθαρίζουμε τα ονόματα των στηλών
-    df.columns = [clean_column_name(col) for col in df.columns]
     
     data = dataframe_to_safe_json(df)
     url = f"{SUPABASE_URL}/rest/v1/{table_name}"
@@ -74,24 +58,62 @@ def upload_table(table_name, df):
 
 print("📤 Ανεβάζω όλα τα δεδομένα στη Supabase...")
 
-# 1. Ledger
+# 1. Ledger – μετονομάζουμε τις στήλες ώστε να ταιριάζουν με τη Supabase
 print("\n   📜 Ledger...")
 df_ledger = pd.read_excel("Oracle_Historical_Ledger.xlsx", sheet_name="Ledger")
+rename_map = {
+    "λ (Lambda)": "λ__Lambda_",
+    "μ (Mu)": "μ__Mu_",
+    "Home_Adv": "home_adv",
+    "H_PPG": "h_ppg",
+    "A_PPG": "a_ppg"
+}
+df_ledger.rename(columns=rename_map, inplace=True)
 upload_table("ledger", df_ledger)
 
-# 2. Enterprise Picks
+# 2. Enterprise Picks – ανέβηκε σωστά, απλά καθαρίζουμε τα ονόματα
 print("\n   📄 Enterprise Picks...")
 df_picks = pd.read_excel("Oracle_V36_Enterprise.xlsx", sheet_name="Picks")
+rename_map_picks = {
+    "Book %": "book",
+    "Stat %": "stat",
+    "stat_p": "stat_p",
+    "Home Adv": "home_adv",
+    "H PPG": "h_ppg",
+    "A PPG": "a_ppg",
+    "Proj Corners": "proj_corners",
+    "Proj Cards": "proj_cards",
+    "Top Scorer Pick": "top_scorer_pick",
+    "Hedge Note": "hedge_note"
+}
+df_picks.rename(columns=rename_map_picks, inplace=True)
 if "id" not in df_picks.columns:
     df_picks.insert(0, "id", range(1, len(df_picks) + 1))
 upload_table("picks", df_picks)
 
-# 3. Top Picks
+# 3. Top Picks – αγνοούμε τις γραμμές τίτλου και μετονομάζουμε
 print("\n   🏆 Top Picks...")
-# Το φύλλο "Top Picks" έχει μια γραμμή τίτλου. Θα το φορτώσουμε σωστά.
-df_top = pd.read_excel("Oracle_Analyst_Report_v6.xlsx", sheet_name="Top Picks", header=4)
-# Φιλτράρουμε τις κενές γραμμές που μπορεί να έχουν απομείνει
-df_top = df_top.dropna(how='all')
+df_top = pd.read_excel("Oracle_Analyst_Report_v6.xlsx", sheet_name="Top Picks", header=None)
+
+# Βρίσκουμε τη γραμμή που περιέχει τις επικεφαλίδες (συνήθως η 5η, index 4)
+header_row = 4
+df_top.columns = df_top.iloc[header_row]
+df_top = df_top.iloc[header_row+1:]
+df_top = df_top.reset_index(drop=True)
+
+# Καθαρίζουμε τα ονόματα στηλών
+df_top.columns = [str(col).strip() for col in df_top.columns]
+rename_map_top = {
+    "#": "id",
+    "Stat %": "stat",
+    "Sharp %": "sharp"
+}
+df_top.rename(columns=rename_map_top, inplace=True)
+
+# Αφαιρούμε γραμμές που είναι κενές ή περιέχουν "AVERAGES"
+df_top = df_top[~df_top['Match'].astype(str).str.contains('AVERAGES', na=False)]
+df_top = df_top.dropna(subset=['Match'])
+
 upload_table("top_picks", df_top)
 
 print("\n🎉 Όλα τα δεδομένα ανέβηκαν επιτυχώς!")
