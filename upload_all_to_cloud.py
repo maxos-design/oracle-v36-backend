@@ -1,5 +1,7 @@
 import requests
 import pandas as pd
+import numpy as np
+import math
 
 SUPABASE_URL = "https://huizvgyasqjtsekevjxs.supabase.co"
 SUPABASE_KEY = "sb_secret_cPbMP7IfUMI4rieanbpKBg_J2Ysxlwj"  # service_role key
@@ -10,16 +12,36 @@ HEADERS = {
     "Prefer": "resolution=merge-duplicates"
 }
 
+def clean_value(val):
+    """Αντικαθιστά NaN, Inf, -Inf με None."""
+    if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
+        return None
+    if isinstance(val, str) and val.lower() == "nan":
+        return None
+    return val
+
+def clean_dataframe(df):
+    """Αντικαθιστά όλες τις NaN/Inf τιμές στο DataFrame με None."""
+    return df.applymap(clean_value)
+
 def upload_table(table_name, df):
+    print(f"   Καθαρισμός δεδομένων για τον πίνακα {table_name}...")
+    df = clean_dataframe(df)
     data = df.where(pd.notnull(df), None).to_dict(orient="records")
     url = f"{SUPABASE_URL}/rest/v1/{table_name}"
-    requests.delete(f"{url}?id=gt.0", headers=HEADERS)
+    
+    # Προσπάθεια διαγραφής προηγούμενων εγγραφών
+    try:
+        requests.delete(f"{url}?select=id", headers=HEADERS)
+    except Exception as e:
+        print(f"   Προειδοποίηση κατά τη διαγραφή: {e}")
+    
     batch_size = 100
     for i in range(0, len(data), batch_size):
         batch = data[i:i+batch_size]
         response = requests.post(url, headers=HEADERS, json=batch)
         if response.status_code not in (200, 201, 204):
-            print(f"Σφάλμα στον πίνακα {table_name}: {response.text}")
+            print(f"   Σφάλμα στον πίνακα {table_name}: {response.status_code}")
             return False
     return True
 
