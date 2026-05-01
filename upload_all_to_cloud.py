@@ -1,6 +1,7 @@
 import requests
 import pandas as pd
 import math
+import re
 
 SUPABASE_URL = "https://huizvgyasqjtsekevjxs.supabase.co"
 SUPABASE_KEY = "sb_secret_cPbMP7IfUMI4rieanbpKBg_J2Ysxlwj"  # service_role key
@@ -11,8 +12,22 @@ HEADERS = {
     "Prefer": "resolution=merge-duplicates"
 }
 
+def clean_column_name(col_name):
+    """Μετατρέπει το όνομα στήλης σε κάτι αποδεκτό από τη Supabase."""
+    col_name = str(col_name).strip()
+    # Αντικαθιστά κενά και ειδικούς χαρακτήρες με κάτω παύλες
+    col_name = re.sub(r'[^\w]', '_', col_name)
+    # Αφαιρεί πολλαπλές κάτω παύλες
+    col_name = re.sub(r'_+', '_', col_name)
+    # Αφαιρεί κάτω παύλες στην αρχή και το τέλος
+    col_name = col_name.strip('_')
+    # Αν το όνομα είναι κενό ή ξεκινά με αριθμό, βάζει ένα πρόθεμα
+    if not col_name or col_name[0].isdigit():
+        col_name = "col_" + col_name
+    return col_name.lower()
+
 def clean_row(row):
-    """Αντικαθιστά όλα τα NaN, Inf, -Inf σε ένα λεξικό (γραμμή) με None."""
+    """Αντικαθιστά όλα τα NaN, Inf, -Inf σε ένα λεξικό με None."""
     cleaned = {}
     for key, value in row.items():
         if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
@@ -25,23 +40,25 @@ def clean_row(row):
 
 def dataframe_to_safe_json(df):
     """Μετατρέπει ένα DataFrame σε λίστα από καθαρά λεξικά."""
-    # Πρώτα αντικαθιστούμε όλα τα NaN/Inf με None στο DataFrame
+    # Αντικαθιστούμε όλα τα NaN/Inf με None
     df = df.where(pd.notnull(df), None)
-    # Μετά μετατρέπουμε σε λεξικά
     records = df.to_dict(orient="records")
-    # Τέλος, καθαρίζουμε κάθε γραμμή ξεχωριστά (για σιγουριά)
     return [clean_row(row) for row in records]
 
 def upload_table(table_name, df):
     print(f"   📤 Ανεβάζω {len(df)} εγγραφές στον πίνακα '{table_name}'...")
+    
+    # Καθαρίζουμε τα ονόματα των στηλών
+    df.columns = [clean_column_name(col) for col in df.columns]
+    
     data = dataframe_to_safe_json(df)
     url = f"{SUPABASE_URL}/rest/v1/{table_name}"
     
-    # Διαγραφή προηγούμενων εγγραφών (προαιρετικό, αν θες να κρατάς μόνο τα τελευταία)
+    # Διαγραφή προηγούμενων εγγραφών
     try:
         requests.delete(f"{url}?select=id", headers=HEADERS)
-    except Exception as e:
-        print(f"   Προειδοποίηση κατά τη διαγραφή: {e}")
+    except Exception:
+        pass
     
     batch_size = 100
     for i in range(0, len(data), batch_size):
@@ -71,7 +88,10 @@ upload_table("picks", df_picks)
 
 # 3. Top Picks
 print("\n   🏆 Top Picks...")
-df_top = pd.read_excel("Oracle_Analyst_Report_v6.xlsx", sheet_name="Top Picks")
+# Το φύλλο "Top Picks" έχει μια γραμμή τίτλου. Θα το φορτώσουμε σωστά.
+df_top = pd.read_excel("Oracle_Analyst_Report_v6.xlsx", sheet_name="Top Picks", header=4)
+# Φιλτράρουμε τις κενές γραμμές που μπορεί να έχουν απομείνει
+df_top = df_top.dropna(how='all')
 upload_table("top_picks", df_top)
 
 print("\n🎉 Όλα τα δεδομένα ανέβηκαν επιτυχώς!")
