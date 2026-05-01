@@ -2,3 +2,11 @@ fastapi
 uvicorn
 requests
 pandas
+openpyxl
+numpy
+scipy
+matplotlib
+seaborn
+xgboost
+scikit-learn
+supabase
