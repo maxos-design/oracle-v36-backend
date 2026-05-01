@@ -64,7 +64,11 @@ print("📤 Ανεβάζω όλα τα δεδομένα στη Supabase...")
 print("\n   📜 Ledger...")
 df_ledger = pd.read_excel("Oracle_Historical_Ledger.xlsx", sheet_name="Ledger")
 df_ledger = clean_column_names(df_ledger)
-# Προσθέσαμε το μ_(mu) στη λίστα διαγραφής
+
+# Διόρθωση για το σφάλμα Integer: Μετατρέπουμε τα 1.0, 2.0 κτλ σε 1, 2
+for col in df_ledger.select_dtypes(include=[np.number]).columns:
+    df_ledger[col] = df_ledger[col].apply(lambda x: int(x) if pd.notna(x) and float(x).is_integer() else x)
+
 df_ledger = df_ledger.drop(columns=['λ_(lambda)', 'lambda_value', 'μ_(mu)', 'mu_value'], errors='ignore')
 upload_dataframe("ledger", df_ledger)
 
@@ -98,9 +102,14 @@ if header_idx is not None:
         df_top = df_top[~df_top["Match"].astype(str).str.contains("AVERAGE", na=False)]
     
     df_top = clean_column_names(df_top)
-    # Προσθέσαμε το sharp_% -> sharp_pct
-    df_top = df_top.rename(columns={'02/05': 'date', 'sharp_%': 'sharp_pct'})
+    # Προσθέσαμε και το stat_% -> stat_pct
+    df_top = df_top.rename(columns={'02/05': 'date', 'sharp_%': 'sharp_pct', 'stat_%': 'stat_pct'})
     df_top = df_top.drop(columns=['#', 'id'], errors='ignore')
+    
+    # Διόρθωση για Integer και εδώ
+    for col in df_top.select_dtypes(include=[np.number]).columns:
+        df_top[col] = df_top[col].apply(lambda x: int(x) if pd.notna(x) and float(x).is_integer() else x)
+        
     upload_dataframe("top_picks", df_top)
 else:
     print("   ⚠️ Δεν βρέθηκε γραμμή επικεφαλίδων. Το ανέβασμα ακυρώθηκε.")
