@@ -182,7 +182,111 @@ def optimizer_thresholds(type_filter: str = None):
     df = filter_by_type(df, type_filter)
     if df.empty:
         return {"text": "❌ Δεν υπάρχουν δεδομένα για ανάλυση."}
-    return {"text": "Η ανάλυση κατωφλίων θα εμφανιστεί εδώ. (Ο πλήρης κώδικας προστίθεται στο επόμενο βήμα)"}
+
+    # ── ΟΛΟΚΛΗΡΗ Η ΑΝΑΛΥΣΗ ΚΑΤΩΦΛΙΩΝ ──
+    # Ο κώδικας είναι ο ίδιος με αυτόν του τοπικού Optimizer (find_best_threshold & run_analysis)
+    name_map = {
+        "λ (Lambda)": ["λ (Lambda)", "λ", "Lambda"],
+        "μ (Mu)": ["μ (Mu)", "μ", "Mu"],
+        "Home_Adv": ["Home_Adv", "Home Adv", "HomeAdv"],
+        "H_PPG": ["H_PPG", "H PPG", "HPPG"],
+        "A_PPG": ["A_PPG", "A PPG", "APPG"],
+        "EV": ["EV"],
+        "Total_xG": ["Total_xG", "Total xG"],
+    }
+    col_mapping = {}
+    for internal_name, possible_names in name_map.items():
+        for col in possible_names:
+            if col in df.columns:
+                col_mapping[internal_name] = col
+                break
+
+    if not col_mapping:
+        return {"text": "❌ Δεν βρέθηκαν γνωστές στήλες δεικτών στο Ledger."}
+
+    features = list(col_mapping.keys())
+    markets = df["Market"].unique()
+    best_patterns = []
+
+    for market in markets:
+        for feat in features:
+            real_col = col_mapping[feat]
+            # --- συνάρτηση find_best_threshold ενσωματωμένη εδώ ---
+            subset = df[df["Market"] == market]
+            if len(subset) < 15:
+                continue
+            values = subset[real_col].dropna().unique()
+            if len(values) < 5:
+                continue
+            test_thresholds = np.percentile(values, np.linspace(15, 85, 30))
+            best_delta = -np.inf
+            best_res = None
+            for thresh in test_thresholds:
+                group_above = subset[subset[real_col] >= thresh]
+                group_below = subset[subset[real_col] < thresh]
+                if len(group_above) < 10 or len(group_below) < 10:
+                    continue
+                wr_above = group_above["Win_Binary"].mean()
+                wr_below = group_below["Win_Binary"].mean()
+                roi_above = (group_above["PnL"].sum() / (len(group_above) * 10)) * 100
+                roi_below = (group_below["PnL"].sum() / (len(group_below) * 10)) * 100
+                delta = wr_above - wr_below
+                _, p_val = scipy_stats.ttest_ind(group_above["Win_Binary"], group_below["Win_Binary"], equal_var=False)
+                if abs(delta) > abs(best_delta) and p_val < 0.15:
+                    best_delta = delta
+                    best_res = {
+                        'threshold': thresh,
+                        'wr_above': wr_above,
+                        'wr_below': wr_below,
+                        'roi_above': roi_above,
+                        'roi_below': roi_below,
+                        'delta': delta,
+                        'p_value': p_val,
+                        'samples_above': len(group_above),
+                        'samples_below': len(group_below),
+                        'best_side': 'above' if wr_above > wr_below else 'below'
+                    }
+            if best_res:
+                best_res['feat'] = feat
+                best_res['market'] = market
+                best_patterns.append(best_res)
+
+    if not best_patterns:
+        return {"text": "⚠️ Δεν βρέθηκαν στατιστικά σημαντικά μοτίβα.\nΑπαιτούνται τουλάχιστον 15-20 picks ανά αγορά."}
+
+    best_patterns = sorted(best_patterns, key=lambda x: abs(x['delta']), reverse=True)
+
+    # Δημιουργία αναφοράς κειμένου
+    report_lines = []
+    report_lines.append("🔍 Αποτελέσματα Ανάλυσης Κατωφλίων\n")
+    report_lines.append("=" * 70)
+    for p in best_patterns:
+        sig = "⭐⭐⭐" if p['p_value'] < 0.05 else "⭐"
+        better_side = p['best_side']
+        if better_side == 'above':
+            best_wr = p['wr_above']
+            best_roi = p['roi_above']
+            best_samples = p['samples_above']
+            other_wr = p['wr_below']
+            other_roi = p['roi_below']
+            direction_text = f"ABOVE (≥ {p['threshold']:.3f})"
+        else:
+            best_wr = p['wr_below']
+            best_roi = p['roi_below']
+            best_samples = p['samples_below']
+            other_wr = p['wr_above']
+            other_roi = p['roi_above']
+            direction_text = f"BELOW (< {p['threshold']:.3f})"
+        report_lines.append(f"\n🎯 MARKET: {p['market']}")
+        report_lines.append(f"   Feature  : {p['feat']} {sig}")
+        report_lines.append(f"   Best Side: {direction_text}")
+        report_lines.append(f"   Win Rate : {best_wr:.1%} (vs {other_wr:.1%} opposite)")
+        report_lines.append(f"   Est. ROI : {best_roi:+.2f}% (vs {other_roi:+.2f}%)")
+        report_lines.append(f"   vs Baseline 50%: {'✅ Above' if best_wr > 0.5 else '⚠️ Below'} baseline")
+        report_lines.append(f"   Confidence: {(1-p['p_value']):.1%} | Samples: {best_samples}")
+        report_lines.append("-" * 70)
+
+    return {"text": "\n".join(report_lines)}
 
 @app.get("/optimizer/feature-importance")
 def optimizer_feature_importance(type_filter: str = None):
