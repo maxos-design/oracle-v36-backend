@@ -294,7 +294,78 @@ def optimizer_feature_importance(type_filter: str = None):
     df = filter_by_type(df, type_filter)
     if df.empty:
         return {"text": "❌ Δεν υπάρχουν δεδομένα για ανάλυση."}
-    return {"text": "Η ανάλυση feature importance θα εμφανιστεί εδώ."}
+
+    # ── ΑΝΑΛΥΣΗ FEATURE IMPORTANCE ──
+    feature_cols = ["λ (Lambda)", "μ (Mu)", "Home_Adv", "H_PPG", "A_PPG", "EV", "Odds"]
+    available = [c for c in feature_cols if c in df.columns]
+    if len(available) < 3:
+        return {"text": "❌ Δεν βρέθηκαν αρκετές διαθέσιμες στήλες-δείκτες στο Ledger."}
+
+    model_df = df[available + ["Win_Binary"]].dropna()
+    if len(model_df) < 20:
+        return {"text": f"❌ Χρειάζονται τουλάχιστον 20 εγγραφές (βρέθηκαν {len(model_df)})."}
+
+    X = model_df[available]
+    y = model_df["Win_Binary"]
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+
+    # Random Forest
+    rf = RandomForestClassifier(n_estimators=200, max_depth=4, random_state=42, class_weight='balanced')
+    rf.fit(X_scaled, y)
+    rf_importances = rf.feature_importances_
+    rf_cv_mean = cross_val_score(rf, X_scaled, y, cv=5, scoring='accuracy').mean()
+
+    X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
+    rf.fit(X_train, y_train)
+    rf_preds = rf.predict(X_test)
+    rf_probs = rf.predict_proba(X_test)[:, 1]
+    rf_acc = accuracy_score(y_test, rf_preds)
+    rf_brier = brier_score_loss(y_test, rf_probs)
+
+    # XGBoost
+    xgb_model = xgb.XGBClassifier(n_estimators=200, max_depth=4, learning_rate=0.1,
+                                  subsample=0.8, colsample_bytree=0.8,
+                                  random_state=42, eval_metric='logloss')
+    xgb_model.fit(X_train, y_train)
+    xgb_importances = xgb_model.feature_importances_
+    xgb_cv_mean = cross_val_score(xgb_model, X_scaled, y, cv=5, scoring='accuracy').mean()
+    xgb_preds = xgb_model.predict(X_test)
+    xgb_probs = xgb_model.predict_proba(X_test)[:, 1]
+    xgb_acc = accuracy_score(y_test, xgb_preds)
+    xgb_brier = brier_score_loss(y_test, xgb_probs)
+
+    # Δημιουργία αναφοράς
+    report_lines = []
+    report_lines.append("🧠 Feature Importance (Random Forest vs XGBoost)\n")
+    report_lines.append("=" * 60)
+    report_lines.append(f"  Test Set Size: {len(X_test)} picks\n")
+    report_lines.append(f"  {'Metric':<20} {'Random Forest':<15} {'XGBoost':<15}")
+    report_lines.append("-" * 50)
+    report_lines.append(f"  {'Accuracy':<20} {rf_acc:<15.1%} {xgb_acc:<15.1%}")
+    report_lines.append(f"  {'Brier Score':<20} {rf_brier:<15.3f} {xgb_brier:<15.3f}")
+    report_lines.append(f"  {'CV Accuracy':<20} {rf_cv_mean:<15.1%} {xgb_cv_mean:<15.1%}")
+
+    best_model_name = "XGBoost" if xgb_brier < rf_brier else "Random Forest"
+    report_lines.append(f"\n🏆 Best Model: {best_model_name}\n")
+    report_lines.append(f"📋 Classification Report for {best_model_name}:")
+    report_lines.append("-" * 50)
+    report_lines.append(f"  {'Class':<8} {'Precision':<10} {'Recall':<10} {'F1-Score':<10} {'Support':<10}")
+    best_report = classification_report(y_test, xgb_preds if best_model_name == "XGBoost" else rf_preds,
+                                         target_names=["LOSS", "WIN"], output_dict=True)
+    for cls, metrics in best_report.items():
+        if isinstance(metrics, dict):
+            report_lines.append(f"  {cls:<8} {metrics['precision']:<10.2f} {metrics['recall']:<10.2f} "
+                                f"{metrics['f1-score']:<10.2f} {metrics['support']:<10.0f}")
+    report_lines.append("-" * 50)
+
+    report_lines.append("\n🔍 Feature Importance Rankings:\n")
+    report_lines.append(f"  {'Feature':<20} {'RF Imp.':<10} {'XGB Imp.':<10}")
+    report_lines.append("-" * 42)
+    for name, r_imp, x_imp in zip(available, rf_importances, xgb_importances):
+        report_lines.append(f"  {name:<20} {r_imp:<10.3f} {x_imp:<10.3f}")
+
+    return {"text": "\n".join(report_lines)}
 
 @app.get("/optimizer/streaks")
 def optimizer_streaks(type_filter: str = None):
@@ -302,7 +373,63 @@ def optimizer_streaks(type_filter: str = None):
     df = filter_by_type(df, type_filter)
     if df.empty:
         return {"text": "❌ Δεν υπάρχουν δεδομένα για ανάλυση."}
-    return {"text": "Η ανάλυση σερί θα εμφανιστεί εδώ."}
+
+    # ── ΑΝΑΛΥΣΗ ΣΕΡΙ ──
+    results = df["Win_Binary"].dropna().values
+    if len(results) < 20:
+        return {"text": "❌ Χρειάζονται τουλάχιστον 20 αποτελέσματα για ανάλυση σερί."}
+
+    streaks = []
+    current_streak = []
+    for r in results:
+        if not current_streak or current_streak[-1] == r:
+            current_streak.append(int(r))
+        else:
+            streaks.append((current_streak[0], len(current_streak)))
+            current_streak = [int(r)]
+    if current_streak:
+        streaks.append((current_streak[0], len(current_streak)))
+
+    win_streaks = [s[1] for s in streaks if s[0] == 1]
+    loss_streaks = [s[1] for s in streaks if s[0] == 0]
+
+    win_counter = CollectionsCounter(win_streaks) if win_streaks else {}
+    loss_counter = CollectionsCounter(loss_streaks) if loss_streaks else {}
+
+    win_rate = results.mean()
+    loss_rate = 1 - win_rate
+    max_win = max(win_streaks) if win_streaks else 0
+    max_loss = max(loss_streaks) if loss_streaks else 0
+
+    report_lines = []
+    report_lines.append("📈 Ανάλυση Σερί (Streaks)\n")
+    report_lines.append(f"   Συνολικά αποτελέσματα: {len(results)}")
+    report_lines.append(f"   Win Rate: {win_rate:.1%}")
+    report_lines.append(f"   Loss Rate: {loss_rate:.1%}\n")
+
+    report_lines.append("   ── WIN STREAKS ──")
+    for length in sorted(win_counter.keys()):
+        report_lines.append(f"   {length} νίκες σερί: {win_counter[length]} φορές")
+    report_lines.append(f"   Μέγιστο σερί νικών: {max_win}\n")
+
+    report_lines.append("   ── LOSS STREAKS ──")
+    for length in sorted(loss_counter.keys()):
+        report_lines.append(f"   {length} ήττες σερί: {loss_counter[length]} φορές")
+    report_lines.append(f"   Μέγιστο σερί ηττών: {max_loss}\n")
+
+    report_lines.append("   ── ΘΕΩΡΗΤΙΚΕΣ ΠΙΘΑΝΟΤΗΤΕΣ (Markov) ──")
+    report_lines.append(f"   Πιθανότητα 3 συνεχόμενων ηττών: {loss_rate ** 3:.2%}")
+    report_lines.append(f"   Πιθανότητα 5 συνεχόμενων ηττών: {loss_rate ** 5:.2%}")
+    report_lines.append(f"   Πιθανότητα 7 συνεχόμενων ηττών: {loss_rate ** 7:.2%}")
+
+    expected_max = int(np.log(1/500) / np.log(loss_rate)) if 0 < loss_rate < 1 else 0
+    report_lines.append(f"   Αναμενόμενο μέγιστο σερί ηττών σε 500 πονταρίσματα: ~{expected_max}\n")
+
+    report_lines.append("💡 ΨΥΧΟΛΟΓΙΚΗ ΠΡΟΕΤΟΙΜΑΣΙΑ:")
+    report_lines.append(f"   Να είσαι προετοιμασμένος να χάσεις {expected_max} συνεχόμενα στοιχήματα.")
+    report_lines.append("   Αυτό είναι ΦΥΣΙΟΛΟΓΙΚΟ και ΑΝΑΜΕΝΟΜΕΝΟ. Μην αλλάξεις στρατηγική!")
+
+    return {"text": "\n".join(report_lines)}
 
 @app.get("/optimizer/monte-carlo")
 def optimizer_monte_carlo(type_filter: str = None):
@@ -310,7 +437,42 @@ def optimizer_monte_carlo(type_filter: str = None):
     df = filter_by_type(df, type_filter)
     if df.empty:
         return {"text": "❌ Δεν υπάρχουν δεδομένα για ανάλυση."}
-    return {"text": "Η προσομοίωση Monte Carlo θα εμφανιστεί εδώ."}
+
+    pnls = df["PnL"].dropna().values
+    if len(pnls) < 20:
+        return {"text": "❌ Χρειάζονται τουλάχιστον 20 settled picks για αξιόπιστο Monte Carlo."}
+
+    n_bets = 500
+    n_sims = 5000
+    start_bankroll = 300
+
+    simulations = np.random.choice(pnls, size=(n_sims, n_bets), replace=True)
+    cumulative_pnl = np.cumsum(simulations, axis=1)
+    bankrolls = start_bankroll + cumulative_pnl
+
+    final_bankrolls = bankrolls[:, -1]
+    ruin_prob = np.mean(np.any(bankrolls <= 0, axis=1))
+    median_final = np.median(final_bankrolls)
+    pct_5 = np.percentile(final_bankrolls, 5)
+    pct_95 = np.percentile(final_bankrolls, 95)
+    win_rate_hist = (pnls > 0).mean()
+
+    report_lines = []
+    report_lines.append("🎲 MONTE CARLO SIMULATOR (Bootstrapping από το Ledger)\n")
+    report_lines.append("=" * 60)
+    report_lines.append(f"📈 Ιστορικό Win Rate: {win_rate_hist:.1%} (Βασισμένο σε {len(pnls)} πονταρίσματα)\n")
+    report_lines.append(f"💰 Αρχικό Κεφάλαιο : €{start_bankroll}")
+    report_lines.append(f"📉 Risk of Ruin      : {ruin_prob:.1%} (Πιθανότητα μηδενισμού)")
+    report_lines.append(f"🎯 Διάμεσο Τελικό     : €{median_final:.2f}")
+    report_lines.append(f"⚠️ 5% Χειρότερο Σενάριο: €{pct_5:.2f}")
+    report_lines.append(f"🚀 95% Καλύτερο Σενάριο: €{pct_95:.2f}")
+    report_lines.append("=" * 60)
+    if ruin_prob > 0.05:
+        report_lines.append("⚠️ ΠΡΟΕΙΔΟΠΟΙΗΣΗ: Υψηλό Risk of Ruin. Σκέψου να μειώσεις το ποντάρισμα.")
+    else:
+        report_lines.append("✅ ΑΣΦΑΛΕΣ: Η διαχείριση κεφαλαίου σου είναι στέρεη.")
+
+    return {"text": "\n".join(report_lines)}
 
 @app.get("/optimizer/patterns")
 def optimizer_patterns(type_filter: str = None):
