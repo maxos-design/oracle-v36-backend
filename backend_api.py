@@ -480,7 +480,46 @@ def optimizer_patterns(type_filter: str = None):
     df = filter_by_type(df, type_filter)
     if df.empty:
         return {"text": "❌ Δεν υπάρχουν δεδομένα για ανάλυση."}
-    return {"text": "Η ανάλυση patterns θα εμφανιστεί εδώ."}
+
+    # Φιλτράρισμα μόνο για PATTERN (ακόμα κι αν ο χρήστης επέλεξε "Όλα", εδώ δείχνουμε μόνο τα PATTERN)
+    pattern_df = df[df["Type"].astype(str).str.contains("PATTERN", case=False, na=False)].copy()
+    if pattern_df.empty:
+        return {"text": "⚠️ Δεν βρέθηκαν PATTERN picks στο Ledger."}
+
+    stats = {}
+    for market, group in pattern_df.groupby("Market"):
+        count = len(group)
+        wins = group["Win_Binary"].sum()
+        losses = count - wins
+        win_rate = wins / count if count > 0 else 0
+        total_pnl = group["PnL"].sum() if "PnL" in group.columns else 0
+        avg_odds = group["Odds"].mean() if "Odds" in group.columns else 0
+        stats[market] = {
+            'count': count, 'wins': wins, 'losses': losses, 'win_rate': win_rate,
+            'total_pnl': total_pnl, 'avg_odds': avg_odds,
+        }
+
+    total_patterns = len(pattern_df)
+    total_wins = pattern_df["Win_Binary"].sum()
+    overall_win_rate = total_wins / total_patterns if total_patterns > 0 else 0
+    total_pnl_all = pattern_df["PnL"].sum() if "PnL" in pattern_df.columns else 0
+
+    report_lines = []
+    report_lines.append("📊 PATTERN PICKS SUMMARY\n")
+    report_lines.append("=" * 60)
+    report_lines.append(f"   Συνολικά PATTERN picks: {total_patterns}")
+    report_lines.append(f"   Νίκες: {int(total_wins)}")
+    report_lines.append(f"   Win Rate: {overall_win_rate:.1%}")
+    report_lines.append(f"   Συνολικό P&L: {total_pnl_all:+.2f}€")
+    report_lines.append("=" * 60 + "\n")
+    report_lines.append(f"  {'Market':<15} {'Count':>6} {'Wins':>6} {'Win%':>8} {'P&L':>8} {'Avg Odds':>8}")
+    report_lines.append("-" * 60)
+    for market, s in sorted(stats.items(), key=lambda x: x[1]['count'], reverse=True):
+        report_lines.append(f"  {market:<15} {s['count']:>6} {s['wins']:>6} {s['win_rate']:>7.1%} "
+                            f"{s['total_pnl']:>+7.2f} {s['avg_odds']:>8.2f}")
+    report_lines.append("-" * 60)
+
+    return {"text": "\n".join(report_lines)}
 
 @app.get("/optimizer/discrepancies")
 def optimizer_discrepancies(type_filter: str = None):
@@ -488,4 +527,40 @@ def optimizer_discrepancies(type_filter: str = None):
     df = filter_by_type(df, type_filter)
     if df.empty:
         return {"text": "❌ Δεν υπάρχουν δεδομένα για ανάλυση."}
-    return {"text": "Η ανάλυση αντιφάσεων θα εμφανιστεί εδώ."}
+
+    # Φιλτράρουμε μόνο όσες γραμμές έχουν τιμή στη στήλη Discrepancy_Result
+    if "Discrepancy_Result" not in df.columns:
+        return {"text": "❌ Η στήλη 'Discrepancy_Result' δεν βρέθηκε στο Ledger."}
+
+    disc_df = df[df["Discrepancy_Result"].notna() & (df["Discrepancy_Result"] != "")].copy()
+    if disc_df.empty:
+        return {"text": "⚠️ Δεν βρέθηκαν καταγεγραμμένες αντιφάσεις."}
+
+    total = len(disc_df)
+    model_correct = (disc_df["Discrepancy_Result"] == "MODEL_CORRECT").sum()
+    detector_correct = (disc_df["Discrepancy_Result"] == "DETECTOR_CORRECT").sum()
+    pushes = total - model_correct - detector_correct
+
+    model_win_rate = model_correct / total if total > 0 else 0
+    detector_win_rate = detector_correct / total if total > 0 else 0
+
+    report_lines = []
+    report_lines.append("🔍 DISCREPANCY RESOLUTION – Ποιος είχε τελικά δίκιο;\n")
+    report_lines.append("=" * 60)
+    report_lines.append(f"   Συνολικές αντιφάσεις: {total}")
+    report_lines.append(f"   Το μοντέλο είχε δίκιο: {model_correct} φορές ({model_win_rate:.1%})")
+    report_lines.append(f"   Ο ανιχνευτής είχε δίκιο: {detector_correct} φορές ({detector_win_rate:.1%})")
+    if pushes > 0:
+        report_lines.append(f"   Push/Άλλα: {pushes}")
+    report_lines.append("=" * 60)
+
+    if model_correct > detector_correct:
+        report_lines.append("\n✅ ΤΟ ΜΟΝΤΕΛΟ ΚΕΡΔΙΖΕΙ ΣΤΙΣ ΑΝΤΙΦΑΣΕΙΣ!")
+        report_lines.append("   Εμπιστεύσου το μοντέλο όταν έρχεται σε αντίθεση με τους απλούς δείκτες.")
+    elif detector_correct > model_correct:
+        report_lines.append("\n⚠️ Ο ΑΝΙΧΝΕΥΤΗΣ ΚΕΡΔΙΖΕΙ ΣΤΙΣ ΑΝΤΙΦΑΣΕΙΣ!")
+        report_lines.append("   Οι απλοί δείκτες (λ, μ, PPG) είναι πιο αξιόπιστοι από το μοντέλο σε αυτές τις περιπτώσεις.")
+    else:
+        report_lines.append("\n🤝 ΙΣΟΠΑΛΙΑ ανάμεσα σε μοντέλο και ανιχνευτή.")
+
+    return {"text": "\n".join(report_lines)}
