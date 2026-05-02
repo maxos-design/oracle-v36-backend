@@ -40,6 +40,31 @@ def load_ledger_from_supabase():
     if response.status_code == 200 and response.json():
         df = pd.DataFrame(response.json())
         
+        # 1. Εύρεση στήλης αποτελέσματος (case-insensitive)
+        result_col = next((c for c in df.columns if c.lower() == "result"), None)
+        if result_col is None:
+            print("❌ Δεν βρέθηκε στήλη αποτελέσματος")
+            return pd.DataFrame()
+        
+        # 2. Φιλτράρισμα
+        df = df[df[result_col].isin(["WIN", "LOSS", "PUSH"])].copy()
+        df["Win_Binary"] = df[result_col].map({"WIN": 1, "LOSS": 0, "PUSH": np.nan})
+        
+        # 3. Εύρεση στήλης P&L
+        pnl_col = next((c for c in df.columns if c.lower() == "pnl"), None)
+        
+        # 4. Μετατροπή ΟΛΩΝ των αριθμητικών στηλών (απλά κάνουμε convert ό,τι βρούμε)
+        for col in df.columns:
+            try:
+                df[col] = pd.to_numeric(df[col], errors="ignore")
+            except:
+                pass
+        
+        # 5. Φιλτράρουμε γραμμές που έχουν τουλάχιστον Win_Binary
+        df = df.dropna(subset=["Win_Binary"])
+        return df
+    return pd.DataFrame()
+        
         # Βρίσκουμε τη στήλη αποτελέσματος (result / Result)
         result_col = None
         for c in df.columns:
@@ -188,12 +213,37 @@ def upload_all():
         return {"status": "error", "message": str(e)}
 
 # ───────────── OPTIMIZER ENDPOINTS ─────────────
-@app.get("/optimizer/thresholds")
-def optimizer_thresholds(type_filter: str = None):
-    df = load_ledger_from_supabase()
-    df = filter_by_type(df, type_filter)
-    if df.empty:
-        return {"text": "❌ Δεν υπάρχουν δεδομένα για ανάλυση."}
+def load_ledger_from_supabase():
+    """Φορτώνει το Ledger από τη Supabase και το επιστρέφει ως DataFrame."""
+    url = f"{SUPABASE_URL}/rest/v1/ledger"
+    response = requests.get(url, headers=HEADERS, params={"select": "*"})
+    if response.status_code == 200 and response.json():
+        df = pd.DataFrame(response.json())
+        
+        # 1. Εύρεση στήλης αποτελέσματος (case-insensitive)
+        result_col = next((c for c in df.columns if c.lower() == "result"), None)
+        if result_col is None:
+            print("❌ Δεν βρέθηκε στήλη αποτελέσματος")
+            return pd.DataFrame()
+        
+        # 2. Φιλτράρισμα
+        df = df[df[result_col].isin(["WIN", "LOSS", "PUSH"])].copy()
+        df["Win_Binary"] = df[result_col].map({"WIN": 1, "LOSS": 0, "PUSH": np.nan})
+        
+        # 3. Εύρεση στήλης P&L
+        pnl_col = next((c for c in df.columns if c.lower() == "pnl"), None)
+        
+        # 4. Μετατροπή ΟΛΩΝ των αριθμητικών στηλών (απλά κάνουμε convert ό,τι βρούμε)
+        for col in df.columns:
+            try:
+                df[col] = pd.to_numeric(df[col], errors="ignore")
+            except:
+                pass
+        
+        # 5. Φιλτράρουμε γραμμές που έχουν τουλάχιστον Win_Binary
+        df = df.dropna(subset=["Win_Binary"])
+        return df
+    return pd.DataFrame()
     
     name_map = {
         "λ (Lambda)": ["λ (Lambda)", "λ", "Lambda"],
