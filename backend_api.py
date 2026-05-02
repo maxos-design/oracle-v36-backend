@@ -45,18 +45,55 @@ def upload_to_supabase(table_name, df):
     return True
 
 def load_ledger_from_supabase():
+    """Φορτώνει το Ledger από τη Supabase και το επιστρέφει ως DataFrame."""
     url = f"{SUPABASE_URL}/rest/v1/ledger"
     response = requests.get(url, headers=HEADERS, params={"select": "*"})
     if response.status_code == 200 and response.json():
         df = pd.DataFrame(response.json())
-        df = df[df["Result"].isin(["WIN", "LOSS", "PUSH"])].copy()
-        df["Win_Binary"] = df["Result"].map({"WIN": 1, "LOSS": 0, "PUSH": np.nan})
-        numeric_cols = ["Odds", "EV", "λ (Lambda)", "μ (Mu)", "Home_Adv", "H_PPG", "A_PPG",
-                        "Home_xG", "Away_xG", "Total_xG", "Total_Corners", "Total_Cards", "PnL"]
-        for col in numeric_cols:
-            if col in df.columns:
+        
+        # 1. Εύρεση της στήλης αποτελέσματος (case‑insensitive)
+        result_col = next((c for c in df.columns if c.lower() == "result"), None)
+        if result_col is None:
+            print("❌ Δεν βρέθηκε στήλη 'Result' ή 'result'")
+            return pd.DataFrame()
+        
+        # 2. Εύρεση της στήλης P&L
+        pnl_col = next((c for c in df.columns if c.lower() == "pnl"), "PnL")
+        
+        # 3. Φιλτράρισμα
+        df = df[df[result_col].isin(["WIN", "LOSS", "PUSH"])].copy()
+        df["Win_Binary"] = df[result_col].map({"WIN": 1, "LOSS": 0, "PUSH": np.nan})
+        
+        # 4. Μετατροπή αριθμητικών στηλών (ψάχνουμε με case‑insensitive)
+        numeric_cols = {
+            "odds": "Odds",
+            "ev": "EV",
+            "pnl": pnl_col,
+            "home_xg": "Home_xG",
+            "away_xg": "Away_xG",
+            "total_xg": "Total_xG",
+            "total_corners": "Total_Corners",
+            "total_cards": "Total_Cards",
+            "home_goals": "Home_Goals",
+            "away_goals": "Away_Goals",
+            "home_sot": "Home_SOT",
+            "away_sot": "Away_SOT",
+            "red_cards": "Red_Cards",
+            "penalties": "Penalties"
+        }
+        
+        for lower_name, standard_name in numeric_cols.items():
+            col = next((c for c in df.columns if c.lower() == lower_name), None)
+            if col:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
-        return df.dropna(subset=["Win_Binary", "PnL"])
+            # Προσθέτουμε και τις στήλες λ, μ, ppg
+            for greek_col in ["λ (Lambda)", "μ (Mu)", "Home_Adv", "H_PPG", "A_PPG"]:
+                if greek_col in df.columns:
+                    df[greek_col] = pd.to_numeric(df[greek_col], errors="coerce")
+        
+        # 5. Επιστρέφουμε μόνο γραμμές με P&L
+        return df.dropna(subset=["Win_Binary", pnl_col])
+    
     return pd.DataFrame()
 
 def filter_by_type(df, type_filter):
