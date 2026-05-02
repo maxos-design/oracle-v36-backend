@@ -32,7 +32,33 @@ HEADERS = {
     "Prefer": "resolution=merge-duplicates"
 }
 
-# ── ΒΟΗΘΗΤΙΚΕΣ ΣΥΝΑΡΤΗΣΕΙΣ ──
+# ─── ΒΟΗΘΗΤΙΚΗ ΣΥΝΑΡΤΗΣΗ ΓΙΑ ΑΝΕΒΑΣΜΑ ───
+def upload_to_supabase(table_name, df):
+    data = df.where(pd.notnull(df), None).to_dict(orient="records")
+    url = f"{SUPABASE_URL}/rest/v1/{table_name}"
+    requests.delete(f"{url}?id=gt.0", headers=HEADERS)
+    batch_size = 100
+    for i in range(0, len(data), batch_size):
+        batch = data[i:i+batch_size]
+        response = requests.post(url, headers=HEADERS, json=batch)
+        if response.status_code not in (200, 201, 204):
+            return False
+    return True
+
+# ─── ΒΟΗΘΗΤΙΚΗ: ΦΟΡΤΩΣΗ LEDGER ΜΕ ΕΥΕΛΙΚΤΗ ΑΝΑΖΗΤΗΣΗ ΣΤΗΛΩΝ ───
+def normalize_column_name(col):
+    """Μετατρέπει ένα όνομα στήλης σε 'καθαρή' μορφή για σύγκριση."""
+    return col.strip().lower().replace(' ', '_').replace('(', '').replace(')', '')
+
+def find_column(df, possible_names):
+    """Βρίσκει μια στήλη που ταιριάζει με κάποιο από τα πιθανά ονόματα."""
+    normalized_cols = {normalize_column_name(c): c for c in df.columns}
+    for name in possible_names:
+        norm_name = normalize_column_name(name)
+        if norm_name in normalized_cols:
+            return normalized_cols[norm_name]
+    return None
+
 def load_ledger_from_supabase():
     """Φορτώνει το Ledger από τη Supabase και το επιστρέφει ως DataFrame."""
     url = f"{SUPABASE_URL}/rest/v1/ledger"
@@ -40,8 +66,8 @@ def load_ledger_from_supabase():
     if response.status_code == 200 and response.json():
         df = pd.DataFrame(response.json())
         
-        # 1. Εύρεση στήλης αποτελέσματος (case-insensitive)
-        result_col = next((c for c in df.columns if c.lower() == "result"), None)
+        # 1. Βρες τη στήλη αποτελέσματος
+        result_col = find_column(df, ["Result", "result"])
         if result_col is None:
             print("❌ Δεν βρέθηκε στήλη αποτελέσματος")
             return pd.DataFrame()
@@ -50,57 +76,30 @@ def load_ledger_from_supabase():
         df = df[df[result_col].isin(["WIN", "LOSS", "PUSH"])].copy()
         df["Win_Binary"] = df[result_col].map({"WIN": 1, "LOSS": 0, "PUSH": np.nan})
         
-        # 3. Εύρεση στήλης P&L
-        pnl_col = next((c for c in df.columns if c.lower() == "pnl"), None)
+        # 3. Βρες τη στήλη P&L
+        pnl_col = find_column(df, ["PnL", "pnl", "P&L"])
         
-        # 4. Μετατροπή ΟΛΩΝ των αριθμητικών στηλών (απλά κάνουμε convert ό,τι βρούμε)
+        # 4. Μετάτρεψε όλες τις αριθμητικές στήλες
         for col in df.columns:
             try:
                 df[col] = pd.to_numeric(df[col], errors="ignore")
             except:
                 pass
         
-        # 5. Φιλτράρουμε γραμμές που έχουν τουλάχιστον Win_Binary
+        # 5. Φιλτράρουμε γραμμές που έχουν Win_Binary
         df = df.dropna(subset=["Win_Binary"])
         return df
     return pd.DataFrame()
-        
-        # Βρίσκουμε τη στήλη αποτελέσματος (result / Result)
-        result_col = None
-        for c in df.columns:
-            if c.lower() == "result":
-                result_col = c
-                break
-        if result_col is None:
-            print("❌ Δεν βρέθηκε στήλη αποτελέσματος")
-            return pd.DataFrame()
-        
-        # Φιλτράρισμα
-        df = df[df[result_col].isin(["WIN", "LOSS", "PUSH"])].copy()
-        df["Win_Binary"] = df[result_col].map({"WIN": 1, "LOSS": 0, "PUSH": np.nan})
-        
-        # Μετατροπή αριθμητικών στηλών
-        numeric_cols = [
-            "Odds", "EV", "λ (Lambda)", "μ (Mu)", "Home_Adv", "H_PPG", "A_PPG",
-            "Home_xG", "Away_xG", "Total_xG", "Total_Corners", "Total_Cards", "PnL",
-            "odds", "ev", "home_xg", "away_xg", "total_xg", "total_corners", "total_cards", "pnl"
-        ]
-        for col in numeric_cols:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-        
-        # Εξασφαλίζουμε ότι υπάρχει στήλη PnL (για το dropna)
-        pnl_col = next((c for c in df.columns if c.lower() == "pnl"), None)
-        if pnl_col:
-            return df.dropna(subset=["Win_Binary", pnl_col])
-        return df.dropna(subset=["Win_Binary"])
-    return pd.DataFrame()
 
 def filter_by_type(df, type_filter):
+    """Φιλτράρει το DataFrame ανάλογα με τον τύπο (VALUE / PATTERN)."""
+    type_col = find_column(df, ["Type", "type", "TYPE"])
+    if type_col is None:
+        return df  # αν δεν υπάρχει στήλη Type, επιστρέφουμε όλα
     if type_filter == "VALUE":
-        return df[df["Type"].astype(str).str.contains("VALUE", case=False, na=False)]
+        return df[df[type_col].astype(str).str.contains("VALUE", case=False, na=False)]
     elif type_filter == "PATTERN":
-        return df[df["Type"].astype(str).str.contains("PATTERN", case=False, na=False)]
+        return df[df[type_col].astype(str).str.contains("PATTERN", case=False, na=False)]
     return df
 
 @app.get("/")
@@ -112,7 +111,9 @@ def get_ledger(limit: int = 50, market: str = None):
     url = f"{SUPABASE_URL}/rest/v1/ledger"
     params = {"select": "*", "limit": limit, "order": "date.desc"}
     if market:
-        params["market"] = f"eq.{market}"
+        market_col = find_column(pd.DataFrame(), ["Market", "market"])
+        if market_col:
+            params["market"] = f"eq.{market}"
     response = requests.get(url, headers=HEADERS, params=params)
     return response.json() if response.status_code == 200 else {"error": response.text}
 
@@ -212,85 +213,78 @@ def upload_all():
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-# ───────────── OPTIMIZER ENDPOINTS ─────────────
-def load_ledger_from_supabase():
-    """Φορτώνει το Ledger από τη Supabase και το επιστρέφει ως DataFrame."""
-    url = f"{SUPABASE_URL}/rest/v1/ledger"
-    response = requests.get(url, headers=HEADERS, params={"select": "*"})
-    if response.status_code == 200 and response.json():
-        df = pd.DataFrame(response.json())
-        
-        # 1. Εύρεση στήλης αποτελέσματος (case-insensitive)
-        result_col = next((c for c in df.columns if c.lower() == "result"), None)
-        if result_col is None:
-            print("❌ Δεν βρέθηκε στήλη αποτελέσματος")
-            return pd.DataFrame()
-        
-        # 2. Φιλτράρισμα
-        df = df[df[result_col].isin(["WIN", "LOSS", "PUSH"])].copy()
-        df["Win_Binary"] = df[result_col].map({"WIN": 1, "LOSS": 0, "PUSH": np.nan})
-        
-        # 3. Εύρεση στήλης P&L
-        pnl_col = next((c for c in df.columns if c.lower() == "pnl"), None)
-        
-        # 4. Μετατροπή ΟΛΩΝ των αριθμητικών στηλών (απλά κάνουμε convert ό,τι βρούμε)
-        for col in df.columns:
-            try:
-                df[col] = pd.to_numeric(df[col], errors="ignore")
-            except:
-                pass
-        
-        # 5. Φιλτράρουμε γραμμές που έχουν τουλάχιστον Win_Binary
-        df = df.dropna(subset=["Win_Binary"])
-        return df
-    return pd.DataFrame()
+# ───────────── OPTIMIZER ENDPOINTS (ΜΕ FLEXIBLE COLUMN NAMES) ─────────────
+@app.get("/optimizer/thresholds")
+def optimizer_thresholds(type_filter: str = None):
+    df = load_ledger_from_supabase()
+    df = filter_by_type(df, type_filter)
+    if df.empty:
+        return {"text": "❌ Δεν υπάρχουν δεδομένα για ανάλυση."}
     
+    # Χάρτης πιθανών ονομάτων
     name_map = {
-        "λ (Lambda)": ["λ (Lambda)", "λ", "Lambda"],
-        "μ (Mu)": ["μ (Mu)", "μ", "Mu"],
-        "Home_Adv": ["Home_Adv", "Home Adv", "HomeAdv"],
-        "H_PPG": ["H_PPG", "H PPG", "HPPG"],
-        "A_PPG": ["A_PPG", "A PPG", "APPG"],
-        "EV": ["EV"],
-        "Total_xG": ["Total_xG", "Total xG"],
+        "lambda": ["λ (Lambda)", "λ", "lambda", "λ_lambda"],
+        "mu": ["μ (Mu)", "μ", "mu", "μ_mu"],
+        "home_adv": ["Home_Adv", "Home Adv", "home_adv", "HomeAdv"],
+        "h_ppg": ["H_PPG", "H PPG", "h_ppg", "HPPG"],
+        "a_ppg": ["A_PPG", "A PPG", "a_ppg", "APPG"],
+        "ev": ["EV", "ev"],
+        "total_xg": ["Total_xG", "Total xG", "total_xg"],
     }
-    col_mapping = {}
-    for internal_name, possible_names in name_map.items():
-        for col in possible_names:
-            if col in df.columns:
-                col_mapping[internal_name] = col
-                break
     
-    if not col_mapping:
-        return {"text": "❌ Δεν βρέθηκαν γνωστές στήλες δεικτών στο Ledger."}
+    # Βρίσκουμε τις πραγματικές στήλες
+    col_mapping = {}
+    for key, possible_names in name_map.items():
+        col = find_column(df, possible_names)
+        if col:
+            col_mapping[key] = col
+    
+    if len(col_mapping) < 2:
+        return {"text": "❌ Δεν βρέθηκαν αρκετές στήλες δεικτών στο Ledger."}
+    
+    # Βρίσκουμε τη στήλη Market
+    market_col = find_column(df, ["Market", "market"])
+    if market_col is None:
+        return {"text": "❌ Δεν βρέθηκε στήλη Market."}
     
     features = list(col_mapping.keys())
-    markets = df["Market"].unique()
+    markets = df[market_col].unique()
     best_patterns = []
     
     for market in markets:
+        subset = df[df[market_col] == market]
+        if len(subset) < 15:
+            continue
+        
         for feat in features:
             real_col = col_mapping[feat]
-            subset = df[df["Market"] == market]
-            if len(subset) < 15:
-                continue
             values = subset[real_col].dropna().unique()
             if len(values) < 5:
                 continue
+            
             test_thresholds = np.percentile(values, np.linspace(15, 85, 30))
             best_delta = -np.inf
             best_res = None
+            
             for thresh in test_thresholds:
                 group_above = subset[subset[real_col] >= thresh]
                 group_below = subset[subset[real_col] < thresh]
                 if len(group_above) < 10 or len(group_below) < 10:
                     continue
+                
                 wr_above = group_above["Win_Binary"].mean()
                 wr_below = group_below["Win_Binary"].mean()
-                roi_above = (group_above["PnL"].sum() / (len(group_above) * 10)) * 100 if "PnL" in group_above.columns else 0
-                roi_below = (group_below["PnL"].sum() / (len(group_below) * 10)) * 100 if "PnL" in group_below.columns else 0
+                
+                pnl_col = find_column(subset, ["PnL", "pnl"])
+                if pnl_col:
+                    roi_above = (group_above[pnl_col].sum() / (len(group_above) * 10)) * 100
+                    roi_below = (group_below[pnl_col].sum() / (len(group_below) * 10)) * 100
+                else:
+                    roi_above = roi_below = 0
+                
                 delta = wr_above - wr_below
                 _, p_val = scipy_stats.ttest_ind(group_above["Win_Binary"], group_below["Win_Binary"], equal_var=False)
+                
                 if abs(delta) > abs(best_delta) and p_val < 0.15:
                     best_delta = delta
                     best_res = {
@@ -305,6 +299,7 @@ def load_ledger_from_supabase():
                         'samples_below': len(group_below),
                         'best_side': 'above' if wr_above > wr_below else 'below'
                     }
+            
             if best_res:
                 best_res['feat'] = feat
                 best_res['market'] = market
@@ -315,15 +310,19 @@ def load_ledger_from_supabase():
     
     best_patterns = sorted(best_patterns, key=lambda x: abs(x['delta']), reverse=True)
     report_lines = ["🔍 Αποτελέσματα Ανάλυσης Κατωφλίων\n", "=" * 70]
+    
     for p in best_patterns:
         sig = "⭐⭐⭐" if p['p_value'] < 0.05 else "⭐"
         better_side = p['best_side']
         if better_side == 'above':
             best_wr = p['wr_above']; best_roi = p['roi_above']; best_samples = p['samples_above']
-            other_wr = p['wr_below']; other_roi = p['roi_below']; direction_text = f"ABOVE (≥ {p['threshold']:.3f})"
+            other_wr = p['wr_below']; other_roi = p['roi_below']
+            direction_text = f"ABOVE (≥ {p['threshold']:.3f})"
         else:
             best_wr = p['wr_below']; best_roi = p['roi_below']; best_samples = p['samples_below']
-            other_wr = p['wr_above']; other_roi = p['roi_above']; direction_text = f"BELOW (< {p['threshold']:.3f})"
+            other_wr = p['wr_above']; other_roi = p['roi_above']
+            direction_text = f"BELOW (< {p['threshold']:.3f})"
+        
         report_lines.append(f"\n🎯 MARKET: {p['market']}")
         report_lines.append(f"   Feature  : {p['feat']} {sig}")
         report_lines.append(f"   Best Side: {direction_text}")
@@ -342,20 +341,36 @@ def optimizer_feature_importance(type_filter: str = None):
     if df.empty:
         return {"text": "❌ Δεν υπάρχουν δεδομένα για ανάλυση."}
     
-    feature_cols = ["λ (Lambda)", "μ (Mu)", "Home_Adv", "H_PPG", "A_PPG", "EV", "Odds"]
-    available = [c for c in feature_cols if c in df.columns]
-    if len(available) < 3:
-        return {"text": "❌ Δεν βρέθηκαν αρκετές διαθέσιμες στήλες-δείκτες στο Ledger."}
+    # Βρίσκουμε τις στήλες με ευέλικτο τρόπο
+    feature_map = {
+        "lambda": ["λ (Lambda)", "λ", "lambda"],
+        "mu": ["μ (Mu)", "μ", "mu"],
+        "home_adv": ["Home_Adv", "Home Adv", "home_adv"],
+        "h_ppg": ["H_PPG", "H PPG", "h_ppg"],
+        "a_ppg": ["A_PPG", "A PPG", "a_ppg"],
+        "ev": ["EV", "ev"],
+        "odds": ["Odds", "odds"],
+    }
     
-    model_df = df[available + ["Win_Binary"]].dropna()
+    available_features = []
+    for key, possible_names in feature_map.items():
+        col = find_column(df, possible_names)
+        if col:
+            available_features.append(col)
+    
+    if len(available_features) < 3:
+        return {"text": "❌ Δεν βρέθηκαν αρκετές στήλες δεικτών στο Ledger."}
+    
+    model_df = df[available_features + ["Win_Binary"]].dropna()
     if len(model_df) < 20:
         return {"text": f"❌ Χρειάζονται τουλάχιστον 20 εγγραφές (βρέθηκαν {len(model_df)})."}
     
-    X = model_df[available]
+    X = model_df[available_features]
     y = model_df["Win_Binary"]
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
     
+    # Random Forest
     rf = RandomForestClassifier(n_estimators=200, max_depth=4, random_state=42, class_weight='balanced')
     rf.fit(X_scaled, y)
     rf_importances = rf.feature_importances_
@@ -368,6 +383,7 @@ def optimizer_feature_importance(type_filter: str = None):
     rf_acc = accuracy_score(y_test, rf_preds)
     rf_brier = brier_score_loss(y_test, rf_probs)
     
+    # XGBoost
     xgb_model = xgb.XGBClassifier(n_estimators=200, max_depth=4, learning_rate=0.1,
                                   subsample=0.8, colsample_bytree=0.8,
                                   random_state=42, eval_metric='logloss')
@@ -392,7 +408,7 @@ def optimizer_feature_importance(type_filter: str = None):
     report_lines.append("🔍 Feature Importance Rankings:\n")
     report_lines.append(f"  {'Feature':<20} {'RF Imp.':<10} {'XGB Imp.':<10}")
     report_lines.append("-" * 42)
-    for name, r_imp, x_imp in zip(available, rf_importances, xgb_importances):
+    for name, r_imp, x_imp in zip(available_features, rf_importances, xgb_importances):
         report_lines.append(f"  {name:<20} {r_imp:<10.3f} {x_imp:<10.3f}")
     
     return {"text": "\n".join(report_lines)}
@@ -461,7 +477,11 @@ def optimizer_monte_carlo(type_filter: str = None):
     if df.empty:
         return {"text": "❌ Δεν υπάρχουν δεδομένα για ανάλυση."}
     
-    pnls = df["PnL"].dropna().values if "PnL" in df.columns else np.array([])
+    pnl_col = find_column(df, ["PnL", "pnl"])
+    if pnl_col is None:
+        return {"text": "❌ Δεν βρέθηκε στήλη PnL στο Ledger."}
+    
+    pnls = df[pnl_col].dropna().values
     if len(pnls) < 20:
         return {"text": "❌ Χρειάζονται τουλάχιστον 20 settled picks για αξιόπιστο Monte Carlo."}
     
@@ -498,27 +518,37 @@ def optimizer_patterns(type_filter: str = None):
     if df.empty:
         return {"text": "❌ Δεν υπάρχουν δεδομένα για ανάλυση."}
     
-    pattern_df = df[df["Type"].astype(str).str.contains("PATTERN", case=False, na=False)].copy()
+    type_col = find_column(df, ["Type", "type"])
+    if type_col is None:
+        return {"text": "❌ Δεν βρέθηκε στήλη Type στο Ledger."}
+    
+    pattern_df = df[df[type_col].astype(str).str.contains("PATTERN", case=False, na=False)].copy()
     if pattern_df.empty:
         return {"text": "⚠️ Δεν βρέθηκαν PATTERN picks στο Ledger."}
     
+    market_col = find_column(df, ["Market", "market"])
+    if market_col is None:
+        return {"text": "❌ Δεν βρέθηκε στήλη Market στο Ledger."}
+    
     stats = {}
-    for market, group in pattern_df.groupby("Market"):
+    for market, group in pattern_df.groupby(market_col):
         count = len(group)
         wins = group["Win_Binary"].sum()
-        losses = count - wins
         win_rate = wins / count if count > 0 else 0
-        total_pnl = group["PnL"].sum() if "PnL" in group.columns else 0
-        avg_odds = group["Odds"].mean() if "Odds" in group.columns else 0
+        odds_col = find_column(group, ["Odds", "odds"])
+        avg_odds = group[odds_col].mean() if odds_col and odds_col in group.columns else 0
+        pnl_col = find_column(group, ["PnL", "pnl"])
+        total_pnl = group[pnl_col].sum() if pnl_col and pnl_col in group.columns else 0
         stats[market] = {
-            'count': count, 'wins': wins, 'losses': losses, 'win_rate': win_rate,
+            'count': count, 'wins': wins, 'losses': count - wins, 'win_rate': win_rate,
             'total_pnl': total_pnl, 'avg_odds': avg_odds,
         }
     
     total_patterns = len(pattern_df)
     total_wins = pattern_df["Win_Binary"].sum()
     overall_win_rate = total_wins / total_patterns if total_patterns > 0 else 0
-    total_pnl_all = pattern_df["PnL"].sum() if "PnL" in pattern_df.columns else 0
+    pnl_col_all = find_column(pattern_df, ["PnL", "pnl"])
+    total_pnl_all = pattern_df[pnl_col_all].sum() if pnl_col_all and pnl_col_all in pattern_df.columns else 0
     
     report_lines = ["📊 PATTERN PICKS SUMMARY\n", "=" * 60,
                     f"   Συνολικά PATTERN picks: {total_patterns}",
@@ -542,10 +572,10 @@ def optimizer_discrepancies(type_filter: str = None):
     if df.empty:
         return {"text": "❌ Δεν υπάρχουν δεδομένα για ανάλυση."}
     
-    if "Discrepancy_Result" not in df.columns and "discrepancy_result" not in df.columns:
+    disc_col = find_column(df, ["Discrepancy_Result", "discrepancy_result"])
+    if disc_col is None:
         return {"text": "❌ Η στήλη 'Discrepancy_Result' δεν βρέθηκε στο Ledger."}
     
-    disc_col = "Discrepancy_Result" if "Discrepancy_Result" in df.columns else "discrepancy_result"
     disc_df = df[df[disc_col].notna() & (df[disc_col] != "")].copy()
     if disc_df.empty:
         return {"text": "⚠️ Δεν βρέθηκαν καταγεγραμμένες αντιφάσεις."}
