@@ -5,8 +5,8 @@ pandas
 openpyxl
 numpy
 scipy
+scikit-learn
+xgboost
 matplotlib
 seaborn
-xgboost
-scikit-learn
 supabase
