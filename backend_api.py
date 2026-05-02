@@ -5,6 +5,14 @@ import subprocess
 import pandas as pd
 import os
 import sys
+import numpy as np
+from scipy import stats as scipy_stats
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import cross_val_score, train_test_split
+from sklearn.metrics import accuracy_score, classification_report, brier_score_loss
+import xgboost as xgb
+from collections import Counter as CollectionsCounter
 
 app = FastAPI(title="Oracle V36 Backend")
 
@@ -35,6 +43,28 @@ def upload_to_supabase(table_name, df):
         if response.status_code not in (200, 201, 204):
             return False
     return True
+
+def load_ledger_from_supabase():
+    url = f"{SUPABASE_URL}/rest/v1/ledger"
+    response = requests.get(url, headers=HEADERS, params={"select": "*"})
+    if response.status_code == 200 and response.json():
+        df = pd.DataFrame(response.json())
+        df = df[df["Result"].isin(["WIN", "LOSS", "PUSH"])].copy()
+        df["Win_Binary"] = df["Result"].map({"WIN": 1, "LOSS": 0, "PUSH": np.nan})
+        numeric_cols = ["Odds", "EV", "λ (Lambda)", "μ (Mu)", "Home_Adv", "H_PPG", "A_PPG",
+                        "Home_xG", "Away_xG", "Total_xG", "Total_Corners", "Total_Cards", "PnL"]
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        return df.dropna(subset=["Win_Binary", "PnL"])
+    return pd.DataFrame()
+
+def filter_by_type(df, type_filter):
+    if type_filter == "VALUE":
+        return df[df["Type"].astype(str).str.contains("VALUE", case=False, na=False)]
+    elif type_filter == "PATTERN":
+        return df[df["Type"].astype(str).str.contains("PATTERN", case=False, na=False)]
+    return df
 
 @app.get("/")
 def root():
@@ -144,3 +174,52 @@ def upload_all():
             return {"status": "error", "message": result.stderr}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+# ───────────── OPTIMIZER ENDPOINTS ─────────────
+@app.get("/optimizer/thresholds")
+def optimizer_thresholds(type_filter: str = None):
+    df = load_ledger_from_supabase()
+    df = filter_by_type(df, type_filter)
+    if df.empty:
+        return {"text": "❌ Δεν υπάρχουν δεδομένα για ανάλυση."}
+    return {"text": "Η ανάλυση κατωφλίων θα εμφανιστεί εδώ. (Ο πλήρης κώδικας προστίθεται στο επόμενο βήμα)"}
+
+@app.get("/optimizer/feature-importance")
+def optimizer_feature_importance(type_filter: str = None):
+    df = load_ledger_from_supabase()
+    df = filter_by_type(df, type_filter)
+    if df.empty:
+        return {"text": "❌ Δεν υπάρχουν δεδομένα για ανάλυση."}
+    return {"text": "Η ανάλυση feature importance θα εμφανιστεί εδώ."}
+
+@app.get("/optimizer/streaks")
+def optimizer_streaks(type_filter: str = None):
+    df = load_ledger_from_supabase()
+    df = filter_by_type(df, type_filter)
+    if df.empty:
+        return {"text": "❌ Δεν υπάρχουν δεδομένα για ανάλυση."}
+    return {"text": "Η ανάλυση σερί θα εμφανιστεί εδώ."}
+
+@app.get("/optimizer/monte-carlo")
+def optimizer_monte_carlo(type_filter: str = None):
+    df = load_ledger_from_supabase()
+    df = filter_by_type(df, type_filter)
+    if df.empty:
+        return {"text": "❌ Δεν υπάρχουν δεδομένα για ανάλυση."}
+    return {"text": "Η προσομοίωση Monte Carlo θα εμφανιστεί εδώ."}
+
+@app.get("/optimizer/patterns")
+def optimizer_patterns(type_filter: str = None):
+    df = load_ledger_from_supabase()
+    df = filter_by_type(df, type_filter)
+    if df.empty:
+        return {"text": "❌ Δεν υπάρχουν δεδομένα για ανάλυση."}
+    return {"text": "Η ανάλυση patterns θα εμφανιστεί εδώ."}
+
+@app.get("/optimizer/discrepancies")
+def optimizer_discrepancies(type_filter: str = None):
+    df = load_ledger_from_supabase()
+    df = filter_by_type(df, type_filter)
+    if df.empty:
+        return {"text": "❌ Δεν υπάρχουν δεδομένα για ανάλυση."}
+    return {"text": "Η ανάλυση αντιφάσεων θα εμφανιστεί εδώ."}
